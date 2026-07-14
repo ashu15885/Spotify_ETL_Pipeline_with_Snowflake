@@ -1,0 +1,174 @@
+-- Snowpipe setup with task-driven refresh from Azure and LOAD_STATUS tracking
+-- Co-authored with CoCo
+
+USE SPOTIFY_DB;
+
+USE SCHEMA RAW_LAYER;
+
+-- ================================================
+-- Step 1: LOAD_STATUS column (for audit tracking)
+-- Append-only streams ignore UPDATEs, so changing status won't trigger stream
+-- Column already exists on tables; uncomment below only if creating from scratch:
+-- ALTER TABLE RAW_SONGS ADD COLUMN LOAD_STATUS VARCHAR(10) DEFAULT 'NEW';
+-- ALTER TABLE RAW_ARTISTS ADD COLUMN LOAD_STATUS VARCHAR(10) DEFAULT 'NEW';
+-- ALTER TABLE RAW_ALBUMS ADD COLUMN LOAD_STATUS VARCHAR(10) DEFAULT 'NEW';
+-- ================================================
+
+-- ================================================
+-- Step 2: Pipes
+-- ================================================
+
+-- Pipe for Songs
+CREATE OR REPLACE PIPE PIPE_SONGS
+    AUTO_INGEST = FALSE
+    COMMENT = 'Ingest songs.csv from Azure (task-driven refresh)'
+AS
+COPY INTO RAW_LAYER.RAW_SONGS (
+    SONG_ID, SONG_NAME, SONG_DURATION, SONG_URL,
+    SONG_ADDED, ALBUM_ID, ARTIST_ID,
+    _SOURCE_FILE, _FILE_ROW_NUMBER
+)
+FROM (
+    SELECT $1,$2,$3,$4,$5,$6,$7,
+        METADATA$FILENAME,
+        METADATA$FILE_ROW_NUMBER
+    FROM @STAGE_SONGS
+)
+FILE_FORMAT = SPOTIFY_CSV_FORMAT;
+
+-- Pipe for Artists
+CREATE OR REPLACE PIPE PIPE_ARTISTS
+    AUTO_INGEST = FALSE
+AS
+COPY INTO RAW_LAYER.RAW_ARTISTS (
+    ARTIST_ID, ARTIST_NAME, EXTERNAL_URL,
+    _SOURCE_FILE, _FILE_ROW_NUMBER
+)
+FROM (
+    SELECT $1,$2,$3,
+        METADATA$FILENAME,
+        METADATA$FILE_ROW_NUMBER
+    FROM @STAGE_ARTISTS
+)
+FILE_FORMAT = SPOTIFY_CSV_FORMAT;
+
+-- Pipe for Albums
+CREATE OR REPLACE PIPE PIPE_ALBUMS
+    AUTO_INGEST = FALSE
+AS
+COPY INTO RAW_LAYER.RAW_ALBUMS (
+    ALBUM_ID, ALBUM_NAME, ALBUM_RELEASE_DATE,
+    ALBUM_TOTAL_TRACKS, ALBUM_URL,
+    _SOURCE_FILE, _FILE_ROW_NUMBER
+)
+FROM (
+    SELECT $1,$2,$3,$4,$5,
+        METADATA$FILENAME,
+        METADATA$FILE_ROW_NUMBER
+    FROM @STAGE_ALBUMS
+)
+FILE_FORMAT = SPOTIFY_CSV_FORMAT;
+
+-- ================================================
+-- Step 3: Task DAG - Refresh pipes every 5 minutes
+-- ================================================
+
+-- Root task: refresh songs pipe
+CREATE OR REPLACE TASK TASK_REFRESH_PIPE_SONGS
+    WAREHOUSE = COMPUTE_WH
+    SCHEDULE = '5 MINUTE'
+AS
+    ALTER PIPE PIPE_SONGS REFRESH;
+
+-- Child task: refresh artists pipe (runs after songs)
+CREATE OR REPLACE TASK TASK_REFRESH_PIPE_ARTISTS
+    WAREHOUSE = COMPUTE_WH
+    AFTER TASK_REFRESH_PIPE_SONGS
+AS
+    ALTER PIPE PIPE_ARTISTS REFRESH;
+
+-- Child task: refresh albums pipe (runs after artists)
+CREATE OR REPLACE TASK TASK_REFRESH_PIPE_ALBUMS
+    WAREHOUSE = COMPUTE_WH
+    AFTER TASK_REFRESH_PIPE_ARTISTS
+AS
+    ALTER PIPE PIPE_ALBUMS REFRESH;
+
+-- Resume all tasks (children first, then root)
+ALTER TASK TASK_REFRESH_PIPE_ALBUMS RESUME;
+ALTER TASK TASK_REFRESH_PIPE_ARTISTS RESUME;
+ALTER TASK TASK_REFRESH_PIPE_SONGS RESUME;
+
+-- ================================================
+-- Verification queries
+-- ================================================
+SELECT SYSTEM$PIPE_STATUS('RAW_LAYER.PIPE_SONGS');
+SELECT SYSTEM$PIPE_STATUS('RAW_LAYER.PIPE_ARTISTS');
+SELECT SYSTEM$PIPE_STATUS('RAW_LAYER.PIPE_ALBUMS');
+
+-- ================================================
+-- ETL Audit Log - Single source of truth for pipeline execution history
+-- ================================================
+CREATE TABLE IF NOT EXISTS SPOTIFY_DB.RAW_LAYER.ETL_AUDIT_LOG (
+    AUDIT_ID            NUMBER AUTOINCREMENT PRIMARY KEY,
+    PIPELINE_RUN_ID     VARCHAR(100),          -- Groups all tasks in a single pipeline run
+    TASK_NAME           VARCHAR(200),
+    TASK_LAYER          VARCHAR(50),            -- RAW, STAGING, WAREHOUSE
+    OPERATION           VARCHAR(50),            -- MERGE, DELETE, UPDATE, INSERT, PIPE_REFRESH
+    TARGET_TABLE        VARCHAR(200),
+    ROWS_INSERTED       NUMBER DEFAULT 0,
+    ROWS_UPDATED        NUMBER DEFAULT 0,
+    ROWS_DELETED        NUMBER DEFAULT 0,
+    STATUS              VARCHAR(20),            -- SUCCESS, FAILED, SKIPPED
+    ERROR_MESSAGE       VARCHAR(5000),
+    START_TIME          TIMESTAMP_NTZ,
+    END_TIME            TIMESTAMP_NTZ,
+    DURATION_SECONDS    NUMBER,
+    CREATED_AT          TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+-- View: Pipeline execution summary (latest runs)
+CREATE OR REPLACE VIEW SPOTIFY_DB.RAW_LAYER.V_ETL_PIPELINE_SUMMARY AS
+SELECT
+    PIPELINE_RUN_ID,
+    MIN(START_TIME) AS PIPELINE_START,
+    MAX(END_TIME) AS PIPELINE_END,
+    DATEDIFF('second', MIN(START_TIME), MAX(END_TIME)) AS TOTAL_DURATION_SEC,
+    COUNT(*) AS TOTAL_OPERATIONS,
+    SUM(ROWS_INSERTED) AS TOTAL_INSERTED,
+    SUM(ROWS_UPDATED) AS TOTAL_UPDATED,
+    SUM(ROWS_DELETED) AS TOTAL_DELETED,
+    CASE WHEN SUM(CASE WHEN STATUS = 'FAILED' THEN 1 ELSE 0 END) > 0 THEN 'FAILED'
+         WHEN SUM(CASE WHEN STATUS = 'SKIPPED' THEN 1 ELSE 0 END) = COUNT(*) THEN 'SKIPPED'
+         ELSE 'SUCCESS'
+    END AS OVERALL_STATUS
+FROM SPOTIFY_DB.RAW_LAYER.ETL_AUDIT_LOG
+GROUP BY PIPELINE_RUN_ID
+ORDER BY PIPELINE_START DESC;
+
+-- Query task history from Snowflake (read-only, no custom logging needed)
+-- This gives you the full execution chain for the pipeline
+SELECT
+    NAME AS TASK_NAME,
+    STATE,
+    SCHEDULED_TIME,
+    COMPLETED_TIME,
+    DATEDIFF('second', SCHEDULED_TIME, COMPLETED_TIME) AS DURATION_SEC,
+    ERROR_MESSAGE
+FROM TABLE(SPOTIFY_DB.INFORMATION_SCHEMA.TASK_HISTORY(
+    SCHEDULED_TIME_RANGE_START => DATEADD('day', -1, CURRENT_TIMESTAMP()),
+    RESULT_LIMIT => 50
+))
+WHERE NAME IN (
+    'TASK_ROOT_SPOTIFY_PIPELINE',
+    'TASK_LOAD_STAGING_SONGS',
+    'TASK_LOAD_STAGING_ARTISTS',
+    'TASK_LOAD_STAGING_ALBUMS',
+    'TASK_LOAD_DIMENSIONS_ARTISTS',
+    'TASK_LOAD_DIMENSIONS_ALBUMS',
+    'TASK_LOAD_FACTS',
+    'TASK_REFRESH_PIPE_SONGS',
+    'TASK_REFRESH_PIPE_ARTISTS',
+    'TASK_REFRESH_PIPE_ALBUMS'
+)
+ORDER BY SCHEDULED_TIME DESC, NAME;

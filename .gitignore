@@ -1,0 +1,20 @@
+# Credentials & secrets
+*.env
+credentials.json
+*sas_token*
+
+# Snowflake temp files
+.snowflake/
+*.lck
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+
+# Temporary/scratch
+/tmp/
+*.tmp
