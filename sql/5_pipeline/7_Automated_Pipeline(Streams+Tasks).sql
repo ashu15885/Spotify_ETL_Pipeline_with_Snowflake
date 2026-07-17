@@ -65,6 +65,8 @@ BEGIN
     LET v_rows_merged NUMBER := 0;
     LET v_rows_deleted NUMBER := 0;
 
+    BEGIN TRANSACTION;
+
     -- MERGE inserts and updates from stream into staging
     MERGE INTO STAGING_LAYER.STG_SONGS AS tgt
     USING (
@@ -130,7 +132,13 @@ BEGIN
 
     -- Audit log
     INSERT INTO RAW_LAYER.ETL_AUDIT_LOG (PIPELINE_RUN_ID, TASK_NAME, TASK_LAYER, OPERATION, TARGET_TABLE, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED, STATUS, START_TIME, END_TIME, DURATION_SECONDS)
-    VALUES (:v_run_id, 'TASK_LOAD_STAGING_SONGS', 'STAGING', 'MERGE+DELETE', 'STG_SONGS', :v_rows_merged, 0, :v_rows_deleted, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP()));
+    SELECT :v_run_id, 'TASK_LOAD_STAGING_SONGS', 'STAGING', 'MERGE+DELETE', 'STG_SONGS', :v_rows_merged, 0, :v_rows_deleted, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP());
+
+    COMMIT;
+EXCEPTION
+    WHEN OTHER THEN
+        ROLLBACK;
+        RAISE;
 END;
 
 -- ================================================
@@ -147,6 +155,8 @@ BEGIN
     LET v_run_id VARCHAR := TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDDHH24MISS');
     LET v_rows_merged NUMBER := 0;
     LET v_rows_deleted NUMBER := 0;
+
+    BEGIN TRANSACTION;
 
     MERGE INTO STAGING_LAYER.STG_ARTISTS AS tgt
     USING (
@@ -190,7 +200,13 @@ BEGIN
     WHERE LOAD_STATUS = 'NEW';
 
     INSERT INTO RAW_LAYER.ETL_AUDIT_LOG (PIPELINE_RUN_ID, TASK_NAME, TASK_LAYER, OPERATION, TARGET_TABLE, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED, STATUS, START_TIME, END_TIME, DURATION_SECONDS)
-    VALUES (:v_run_id, 'TASK_LOAD_STAGING_ARTISTS', 'STAGING', 'MERGE+DELETE', 'STG_ARTISTS', :v_rows_merged, 0, :v_rows_deleted, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP()));
+    SELECT :v_run_id, 'TASK_LOAD_STAGING_ARTISTS', 'STAGING', 'MERGE+DELETE', 'STG_ARTISTS', :v_rows_merged, 0, :v_rows_deleted, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP());
+
+    COMMIT;
+EXCEPTION
+    WHEN OTHER THEN
+        ROLLBACK;
+        RAISE;
 END;
 
 -- ================================================
@@ -207,6 +223,8 @@ BEGIN
     LET v_run_id VARCHAR := TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDDHH24MISS');
     LET v_rows_merged NUMBER := 0;
     LET v_rows_deleted NUMBER := 0;
+
+    BEGIN TRANSACTION;
 
     MERGE INTO STAGING_LAYER.STG_ALBUMS AS tgt
     USING (
@@ -258,7 +276,13 @@ BEGIN
     WHERE LOAD_STATUS = 'NEW';
 
     INSERT INTO RAW_LAYER.ETL_AUDIT_LOG (PIPELINE_RUN_ID, TASK_NAME, TASK_LAYER, OPERATION, TARGET_TABLE, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED, STATUS, START_TIME, END_TIME, DURATION_SECONDS)
-    VALUES (:v_run_id, 'TASK_LOAD_STAGING_ALBUMS', 'STAGING', 'MERGE+DELETE', 'STG_ALBUMS', :v_rows_merged, 0, :v_rows_deleted, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP()));
+    SELECT :v_run_id, 'TASK_LOAD_STAGING_ALBUMS', 'STAGING', 'MERGE+DELETE', 'STG_ALBUMS', :v_rows_merged, 0, :v_rows_deleted, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP());
+
+    COMMIT;
+EXCEPTION
+    WHEN OTHER THEN
+        ROLLBACK;
+        RAISE;
 END;
 
 -- ================================================
@@ -273,6 +297,8 @@ BEGIN
     LET v_run_id VARCHAR := TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDDHH24MISS');
     LET v_rows_closed NUMBER := 0;
     LET v_rows_inserted NUMBER := 0;
+
+    BEGIN TRANSACTION;
 
     -- MERGE: Close records that are changed or deleted
     MERGE INTO WAREHOUSE_LAYER.DIM_ARTISTS AS tgt
@@ -311,7 +337,13 @@ BEGIN
     v_rows_inserted := SQLROWCOUNT;
 
     INSERT INTO RAW_LAYER.ETL_AUDIT_LOG (PIPELINE_RUN_ID, TASK_NAME, TASK_LAYER, OPERATION, TARGET_TABLE, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED, STATUS, START_TIME, END_TIME, DURATION_SECONDS)
-    VALUES (:v_run_id, 'TASK_LOAD_DIMENSIONS_ARTISTS', 'WAREHOUSE', 'SCD2_MERGE+INSERT', 'DIM_ARTISTS', :v_rows_inserted, :v_rows_closed, 0, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP()));
+    SELECT :v_run_id, 'TASK_LOAD_DIMENSIONS_ARTISTS', 'WAREHOUSE', 'SCD2_MERGE+INSERT', 'DIM_ARTISTS', :v_rows_inserted, :v_rows_closed, 0, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP());
+
+    COMMIT;
+EXCEPTION
+    WHEN OTHER THEN
+        ROLLBACK;
+        RAISE;
 END;
 
 -- ================================================
@@ -326,6 +358,8 @@ BEGIN
     LET v_run_id VARCHAR := TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDDHH24MISS');
     LET v_rows_closed NUMBER := 0;
     LET v_rows_inserted NUMBER := 0;
+
+    BEGIN TRANSACTION;
 
     MERGE INTO WAREHOUSE_LAYER.DIM_ALBUMS AS tgt
     USING (
@@ -367,7 +401,13 @@ BEGIN
     v_rows_inserted := SQLROWCOUNT;
 
     INSERT INTO RAW_LAYER.ETL_AUDIT_LOG (PIPELINE_RUN_ID, TASK_NAME, TASK_LAYER, OPERATION, TARGET_TABLE, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED, STATUS, START_TIME, END_TIME, DURATION_SECONDS)
-    VALUES (:v_run_id, 'TASK_LOAD_DIMENSIONS_ALBUMS', 'WAREHOUSE', 'SCD2_MERGE+INSERT', 'DIM_ALBUMS', :v_rows_inserted, :v_rows_closed, 0, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP()));
+    SELECT :v_run_id, 'TASK_LOAD_DIMENSIONS_ALBUMS', 'WAREHOUSE', 'SCD2_MERGE+INSERT', 'DIM_ALBUMS', :v_rows_inserted, :v_rows_closed, 0, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP());
+
+    COMMIT;
+EXCEPTION
+    WHEN OTHER THEN
+        ROLLBACK;
+        RAISE;
 END;
 
 -- Add IS_VALID column to fact table for soft-delete tracking
@@ -387,6 +427,8 @@ BEGIN
     LET v_rows_merged NUMBER := 0;
     LET v_rows_invalidated NUMBER := 0;
     LET v_rows_revalidated NUMBER := 0;
+
+    BEGIN TRANSACTION;
 
     MERGE INTO WAREHOUSE_LAYER.FACT_SONGS AS tgt
     USING (
@@ -452,7 +494,13 @@ BEGIN
     v_rows_revalidated := SQLROWCOUNT;
 
     INSERT INTO RAW_LAYER.ETL_AUDIT_LOG (PIPELINE_RUN_ID, TASK_NAME, TASK_LAYER, OPERATION, TARGET_TABLE, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED, STATUS, START_TIME, END_TIME, DURATION_SECONDS)
-    VALUES (:v_run_id, 'TASK_LOAD_FACTS', 'WAREHOUSE', 'MERGE+SOFT_DELETE', 'FACT_SONGS', :v_rows_merged, :v_rows_revalidated, :v_rows_invalidated, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP()));
+    SELECT :v_run_id, 'TASK_LOAD_FACTS', 'WAREHOUSE', 'MERGE+SOFT_DELETE', 'FACT_SONGS', :v_rows_merged, :v_rows_revalidated, :v_rows_invalidated, 'SUCCESS', :v_start, CURRENT_TIMESTAMP(), DATEDIFF('second', :v_start, CURRENT_TIMESTAMP());
+
+    COMMIT;
+EXCEPTION
+    WHEN OTHER THEN
+        ROLLBACK;
+        RAISE;
 END;
 
 -- ================================================
