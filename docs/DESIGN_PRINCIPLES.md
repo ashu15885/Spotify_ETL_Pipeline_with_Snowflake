@@ -158,3 +158,46 @@ For SCD2 dimensions:
 - Timestamps stored as `TIMESTAMP_NTZ` (no timezone embedded — relies on session setting for display)
 
 **Why**: Single timezone eliminates confusion when correlating audit logs, task history, and business timestamps.
+
+## 15. Explicit Transaction Control (All-or-Nothing)
+
+Every task wraps its DML statements in an explicit transaction with exception handling:
+
+```sql
+BEGIN
+    LET v_start TIMESTAMP_NTZ := CURRENT_TIMESTAMP();
+    -- variable declarations ...
+
+    BEGIN TRANSACTION;
+
+    -- All DML: MERGE, DELETE, UPDATE, INSERT audit log
+
+    COMMIT;
+EXCEPTION
+    WHEN OTHER THEN
+        ROLLBACK;
+        RAISE;
+END;
+```
+
+**Why**: Without explicit transactions, Snowflake SQL scripting auto-commits each DML independently. If a later statement fails (e.g., the audit INSERT), earlier statements (MERGE, DELETE, UPDATE) remain committed — leaving the pipeline in a partial/inconsistent state. Explicit transactions ensure:
+- On success: all changes commit atomically
+- On failure: all changes roll back, stream offset is NOT advanced, and the task retries cleanly next cycle
+
+**Stream interaction**: A stream's offset advances only at COMMIT. On ROLLBACK, the offset stays unchanged — the same change records remain available for the next execution. This is the key mechanism that makes retry safe.
+
+## 16. INSERT ... SELECT Over INSERT ... VALUES for Expressions
+
+Audit log inserts use `INSERT INTO ... SELECT` instead of `INSERT INTO ... VALUES`:
+
+```sql
+-- Correct: evaluated as an expression
+INSERT INTO ETL_AUDIT_LOG (...)
+SELECT :v_run_id, ..., DATEDIFF('second', :v_start, CURRENT_TIMESTAMP());
+
+-- Incorrect: fails in scripting context
+INSERT INTO ETL_AUDIT_LOG (...)
+VALUES (:v_run_id, ..., DATEDIFF('second', :v_start, CURRENT_TIMESTAMP()));
+```
+
+**Why**: Snowflake's SQL scripting engine cannot evaluate complex expressions (like `DATEDIFF` with variables) inside a `VALUES` clause. It attempts to interpret them as literals, producing a "Invalid expression" compilation error. Using `SELECT` forces proper expression evaluation.

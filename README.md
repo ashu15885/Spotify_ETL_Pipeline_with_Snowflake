@@ -137,3 +137,5 @@ SELECT SYSTEM$PIPE_STATUS('RAW_LAYER.PIPE_SONGS');
 | Pipe skips file | Same filename as previously loaded (14-day dedup) | Use unique timestamped filenames |
 | "ambiguous column name" on ADD COLUMN IF NOT EXISTS | Column already exists | Comment out the ALTER TABLE statement |
 | Task suspended due to errors | Snowflake auto-suspends after repeated failures | Fix root cause, then `ALTER TASK ... RESUME;` |
+| "Invalid expression [DATE_DIFF...]" in VALUES clause | Snowflake scripting can't evaluate DATEDIFF inside VALUES | Use `INSERT INTO ... SELECT` instead of `INSERT INTO ... VALUES` |
+| Partial data after task failure | DML auto-commits without explicit transaction | Wrap all DML in `BEGIN TRANSACTION ... COMMIT` with `EXCEPTION WHEN OTHER THEN ROLLBACK` |
